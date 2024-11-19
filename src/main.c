@@ -1,614 +1,235 @@
-/**
-  ******************************************************************************
-  * @file    main.c
-  * @author  Weili An, Niraj Menon
-  * @date    Jan 24 2024
-  * @brief   ECE 362 Lab 4 Student template
-  ******************************************************************************
-*/
-
-/**
-******************************************************************************/
-
-// Fill out your username, otherwise your completion code will have the 
-// wrong username!
-const char* username = "jwmacdou";
-
-/******************************************************************************
-*/ 
-
 #include "stm32f0xx.h"
-#include <math.h>   // for M_PI
 #include <stdint.h>
 #include <stdio.h>
 
-void nano_wait(int);
-void autotest();
-
-char board [3][3];
+// Game variables
+char board[3][3];
 char currentplayer = 'X';
 
-void initboard() {
-  for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 3; j++) {
-      board[i][j] = ' ';
-    }
-  }
-}
+// Cursor position for current player
+int cursor_row = 0;
+int cursor_col = 0;
 
-int checkwin() {
-  //check rows and columns
-  for (int i = 0; i < 3; i++) {
-    if (board[i][0] == currentplayer && board[i][1] == currentplayer && board[i][2] == currentplayer){
-      return 1; //row win
-    }
-    if (board[0][i] == currentplayer && board[1][i] == currentplayer && board[2][i] == currentplayer){
-      return 1; //column win
-    }
-  }
-  //check diagonals
-  if (board[0][0] == currentplayer && board[1][1] == currentplayer && board[2][2] == currentplayer){
-    return 1;
-  }
-  if (board[0][2] == currentplayer && board[1][1] == currentplayer && board[2][0] == currentplayer){
-    return 1;
-  }
-  return 0;
-}
+// Function prototypes
+void init_board(void);
+int check_win(void);
+int check_draw(void);
+int player_move(int row, int column);
+void switch_player(void);
 
-int checkdraw() {
-  for (int i = 0; i < 3; i++){
-    for (int j = 0; j < 3; j++){
-      if (board[i][j] == ' '){
-        return 0;//no draw
-      }
-    }
-  }
-  return 1; //draw
-}
+// Hardware initialization functions
+void internal_clock(void);
+void init_spi1(void);
+void LCD_Init(void);
+void setup_adc(void);
+void nano_wait(unsigned int n);
 
-int playermove(row, column) {
-  if (board[row][column] == ' '){
-    //valid move
-    board[row][column] = currentplayer;
-  }
-  else {
-    //invalid move
-  }
-}
+// LCD functions
+void LCD_SendCommand(uint8_t cmd);
+void LCD_SendData(uint8_t data);
+void LCD_DrawGameGrid(void);
+void LCD_DrawGameState(void);
+void LCD_DrawCursor(int row, int col);
 
-void switchplayer(){
-  if (currentplayer == 'X') {
-    currentplayer = 'O';
-  }
-  else {
-    currentplayer = 'X';
-  }
-}
+// ADC functions
+void ReadJoysticks(int *joy1_x, int *joy1_y, int *joy2_x, int *joy2_y);
 
-//=============================================================================
-// Part 1: 7-segment display update with DMA
-//=============================================================================
-
-// 16-bits per digit.
-// The most significant 8 bits are the digit number.
-// The least significant 8 bits are the segments to illuminate.
-uint16_t msg[8] = { 0x0000,0x0100,0x0200,0x0300,0x0400,0x0500,0x0600,0x0700 };
-extern const char font[];
-// Print an 8-character string on the 8 digits
-void print(const char str[]);
-// Print a floating-point value.
-void printfloat(float f);
-
-
-//============================================================================
-// enable_ports()
-//============================================================================
-void enable_ports(void) {
-    RCC->AHBENR |= RCC_AHBENR_GPIOBEN;
-    RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
-    GPIOB->MODER &= ~0x3FFFFF;
-    GPIOB->MODER |= 0x155555;
-    GPIOC->OTYPER |= 0b1111<<4;
-    GPIOC->MODER &= ~0xFFFF;
-    GPIOC->MODER |= 0b01<<14;
-    GPIOC->MODER |= 0b01<<12;
-    GPIOC->MODER |= 0b01<<10;
-    GPIOC->MODER |= 0b01<<8;
-    GPIOC->PUPDR |= 0b01;
-    GPIOC->PUPDR |= 0b01<<2;
-    GPIOC->PUPDR |= 0b01<<4;
-    GPIOC->PUPDR |= 0b01<<6;
-}
-
-//============================================================================
-// setup_dma() + enable_dma()
-//============================================================================
-void setup_dma(void) {
-    RCC->AHBENR |= RCC_AHBENR_DMAEN;
-    DMA1_Channel1->CCR &= ~0b1;
-    DMA1_Channel5->CMAR = (uint32_t) msg;
-    DMA1_Channel5->CPAR = (uint32_t) &(GPIOB->ODR);
-    DMA1_Channel5->CNDTR = 8;
-    DMA1_Channel5->CCR |= 0b1<<4;
-    DMA1_Channel5->CCR |= 0b1<<7;
-    DMA1_Channel5->CCR |= 0b01<<10;
-    DMA1_Channel5->CCR |= 0b01<<8;
-    DMA1_Channel5->CCR |= 0b1<<5;
-}
-
-void enable_dma(void) {
-    DMA1_Channel5->CCR |= 0b1;
-}
-
-//============================================================================
-// init_tim15()
-//============================================================================
-void init_tim15(void) {
-   RCC->APB2ENR |= RCC_APB2ENR_TIM15EN;
-   TIM15->PSC = 4800-1;
-   TIM15->ARR = 10-1;
-   TIM15->DIER |= TIM_DIER_UDE;
-   NVIC->ISER[0] |= (1 << 18);
-   TIM15->CR1 |= TIM_CR1_CEN;
-}
-
-//=============================================================================
-// Part 2: Debounced keypad scanning.
-//=============================================================================
-
-uint8_t col; // the column being scanned
-
-void drive_column(int);   // energize one of the column outputs
-int  read_rows();         // read the four row inputs
-void update_history(int col, int rows); // record the buttons of the driven column
-char get_key_event(void); // wait for a button event (press or release)
-char get_keypress(void);  // wait for only a button press event.
-float getfloat(void);     // read a floating-point number from keypad
-void show_keys(void);     // demonstrate get_key_event()
-
-//============================================================================
-// The Timer 7 ISR
-//============================================================================
-// Write the Timer 7 ISR here.  Be sure to give it the right name.
-
-void TIM7_IRQHandler() {
-  TIM7->SR &= ~TIM_SR_UIF;
-  int rows = read_rows();
-  update_history(col, rows);
-  col = (col + 1) & 3;
-  drive_column(col);
-}
-
-//============================================================================
-// init_tim7()
-//============================================================================
-void init_tim7(void) {
-  RCC->APB1ENR |= RCC_APB1ENR_TIM7EN;
-  TIM7->PSC = 4800-1;
-  TIM7->ARR = 10-1;
-  TIM7->DIER |= TIM_DIER_UIE;
-  NVIC->ISER[0] |= (1 << 18);
-  TIM7->CR1 |= TIM_CR1_CEN;
-}
-
-//=============================================================================
-// Part 3: Analog-to-digital conversion for a volume level.
-//=============================================================================
-uint32_t volume = 2048;
-
-//============================================================================
-// setup_adc()
-//============================================================================
-//int i = 0;
-void setup_adc(void) {
-  RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
-  //configure adc_in1 analog mode
-  GPIOA->MODER |= 0b11<<2;
-  GPIOA->MODER |= 0b11<<4;
-  GPIOA->MODER |= 0b11<<6;
-  GPIOA->MODER |= 0b11<<10;
-  RCC->APB2ENR |= RCC_APB2ENR_ADCEN;
-  //RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
-  RCC->CR2 |= RCC_CR2_HSI14ON;
-  while ((RCC->CR2 & RCC_CR2_HSI14RDY) == 0);
-  ADC1->CR |= ADC_CR_ADEN;
-  while ((ADC1->ISR & ADC_ISR_ADRDY) == 0){
-
-  }
-  /*ADC1->CHSELR |= ADC_CHSELR_CHSEL1;
-  ADC1->CHSELR |= ADC_CHSELR_CHSEL2;
-  ADC1->CHSELR |= ADC_CHSELR_CHSEL3;
-  ADC1->CHSELR |= ADC_CHSELR_CHSEL6;*/
-  while ((ADC1->ISR & ADC_ISR_ADRDY) == 0){
-
-  } 
-  
-}
-
-//============================================================================
-// Varables for boxcar averaging.
-//============================================================================
-#define BCSIZE 32
-int bcsum = 0;
-int boxcar[BCSIZE];
-int bcn = 0;
-
-//============================================================================
-// Timer 2 ISR
-//============================================================================
-// Write the Timer 2 ISR here.  Be sure to give it the right name.
-int i = 0;
-void TIM2_IRQHandler() {
-  TIM2->SR &= ~TIM_SR_UIF;
-  ADC1->CR |= ADC_CR_ADSTART;
-  /*while ((ADC1->ISR & ADC_ISR_EOC) == 0){
-
-  } 
-  bcsum -= boxcar[bcn];
-  bcsum += boxcar[bcn] = ADC1->DR;
-  bcn += 1;
-  if (bcn >= BCSIZE){
-    bcn = 0;
-  }*/
-  //volume = bcsum / BCSIZE;
-  /*while ((ADC1->ISR & ADC_ISR_EOC)==0){
-    if (i = 0){
-      ADC1->CHSELR |= ADC_CHSELR_CHSEL1;
-      volume = (ADC1->DR);
-      while ((ADC1->ISR & ADC_ISR_ADRDY) == 0){
-
-      } 
-    }
-    else if (i = 1){
-      ADC1->CHSELR |= ADC_CHSELR_CHSEL2;
-      volume = (ADC1->DR);
-      while ((ADC1->ISR & ADC_ISR_ADRDY) == 0){
-
-      } 
-    }
-    i++;
-    if (i == 2){
-      i = 0;
-    }*/
-    volume = (ADC1->DR);
-    //uord1 = (ADC1->DR);
-  //lorr1 =
-    //ADC1->CR &= ~ADC_CR_ADSTART; 
-    //ADC1->CR &= ~ADC_CR_ADEN;
-    //ADC1->CR |= ADC_CR_ADEN;
-    //while ((ADC1->ISR & ADC_ISR_ADRDY) == 0);
-    //ADC1->CHSELR |= ADC_CHSELR_CHSEL2;
-    //ADC1->CHSELR &= ~ADC_CHSELR_CHSEL2;
-    //while ((ADC1->ISR & ADC_ISR_ADRDY) == 0){
-    //} 
-    //ADC1->CR |= ADC_CR_ADSTART;
-    //ADC1->CR |= ADC_CR_ADSTART;
-    //ADC1->CHSELR |= ADC_CHSELR_CHSEL3;
-    //ADC1->CHSELR |= ADC_CHSELR_CHSEL6; 
-  //}
-  //ADC1->CHSELR |= ADC_CHSELR_CHSEL2;
-  //ADC1->CHSELR |= ADC_CHSELR_CHSEL1;
-  //ADC1->CHSELR &= ~ADC_CHSELR_CHSEL1;
-
-}
-
-//============================================================================
-// init_tim2()
-//============================================================================
-void init_tim2(void) {
-  RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
-  TIM2->PSC = 4800-1;
-  TIM2->ARR = 1000-1;
-  TIM2->DIER |= TIM_DIER_UIE;
-  NVIC->ISER[0] |= (1 << 15);
-  TIM2->CR1 |= TIM_CR1_CEN;
-}
-
-
-//===========================================================================
-// Part 4: Create an analog sine wave of a specified frequency
-//===========================================================================
-void dialer(void);
-
-// Parameters for the wavetable size and expected synthesis rate.
-#define N 1000
-#define RATE 20000
-short int wavetable[N];
-int step0 = 0;
-int offset0 = 0;
-int step1 = 0;
-int offset1 = 0;
-
-//===========================================================================
-// init_wavetable()
-// Write the pattern for a complete cycle of a sine wave into the
-// wavetable[] array.
-//===========================================================================
-void init_wavetable(void) {
-    for(int i=0; i < N; i++)
-        wavetable[i] = 32767 * sin(2 * M_PI * i / N);
-}
-
-//============================================================================
-// set_freq()
-//============================================================================
-void set_freq(int chan, float f) {
-    if (chan == 0) {
-        if (f == 0.0) {
-            step0 = 0;
-            offset0 = 0;
-        } else
-            step0 = (f * N / RATE) * (1<<16);
-    }
-    if (chan == 1) {
-        if (f == 0.0) {
-            step1 = 0;
-            offset1 = 0;
-        } else
-            step1 = (f * N / RATE) * (1<<16);
-    }
-}
-
-//============================================================================
-// setup_dac()
-//============================================================================
-void setup_dac(void) {
-  RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
-  GPIOA->MODER |= 0b11<<8;
-  RCC->APB1ENR |= RCC_APB1ENR_DACEN;
-  DAC->CR &= ~DAC_CR_TSEL1;
-  DAC->CR |= DAC_CR_TEN1;
-  DAC->CR |= DAC_CR_EN1;
-}
-
-//============================================================================
-// Timer 6 ISR
-//============================================================================
-// Write the Timer 6 ISR here.  Be sure to give it the right name.
-void TIM6_DAC_IRQHandler() {
-  TIM6->SR &= ~TIM_SR_UIF;
-  offset0 = offset0 + step0;
-  offset1 = offset1 + step1;
-  if (offset0 >= (N<<16)){
-    offset0 = offset0 - (N<<16);
-  }
-  if (offset1 >= (N<<16)){
-    offset1 = offset1 - (N<<16);
-  }
-  int samp = wavetable[offset0>>16] + wavetable[offset1>>16];
-  samp = samp * volume;
-  samp = samp >> 17;
-  samp = samp + 2048;
-  DAC->DHR12R1 = samp;
-  //copy samp to DAC->DHR12R1
-}
-//============================================================================
-// init_tim6()
-//============================================================================
-void init_tim6(void) {
-  //(PSC+1)(ARR+1) = clock_f/goal_f
-  RCC->APB1ENR |= RCC_APB1ENR_TIM6EN;
-  TIM6->PSC = 480-1;
-  TIM6->ARR = (48000000/(TIM6->PSC+1))/RATE - 1;
-  TIM6->DIER |= TIM_DIER_UIE;
-  NVIC->ISER[0] |= (1 << 17);
-  TIM6->CR1 |= TIM_CR1_CEN;
-  TIM6->CR2 |= TIM_CR2_MMS_1;
-}
-
-//============================================================================
-// All the things you need to test your subroutines.
-//============================================================================
+// Main function
 int main(void) {
-    // printf("here\n");
-    internal_clock();
-    // Initialize the display to something interesting to get started.
-    msg[0] |= font['E'];
-    msg[1] |= font['C'];
-    msg[2] |= font['E'];
-    msg[3] |= font[' '];
-    msg[4] |= font['3'];
-    msg[5] |= font['6'];
-    msg[6] |= font['2'];
-    msg[7] |= font[' '];
-    // printf("here\n");
-    // Uncomment when you are ready to produce a confirmation code.
-    //autotest();
+    internal_clock();      // Initialize system clock
+    init_spi1();           // Initialize SPI1 for TFT LCD
+    LCD_Init();            // Initialize TFT LCD
+    setup_adc();           // Initialize ADC for joystick input
+    init_board();          // Initialize game board
+    LCD_DrawGameGrid();    // Draw the game grid
 
-    enable_ports();
-    setup_dma();
-    enable_dma();
-    init_tim15();
+    while (1) {
+        int joy1_x, joy1_y, joy2_x, joy2_y;
+        ReadJoysticks(&joy1_x, &joy1_y, &joy2_x, &joy2_y);
 
-    // Comment this for-loop before you demo part 1!
-    // Uncomment this loop to see if "ECE 362" is displayed on LEDs.
-    //for (;;) {
-        // asm("wfi");
-     //}
-    //End of for loop
-
-    // Demonstrate part 1
-  //#define SCROLL_DISPLAY
-#ifdef SCROLL_DISPLAY
-    for(;;)
-        for(int i=0; i<8; i++) {
-            print(&"Hello...Hello..."[i]);
-            nano_wait(250000000);
+        // Map joystick input to cursor movement
+        if (currentplayer == 'X') {
+            // Player X uses joystick 1
+            if (joy1_x < 1000 && cursor_col > 0) {
+                cursor_col--;
+                nano_wait(200000000); // Debounce delay
+            } else if (joy1_x > 3000 && cursor_col < 2) {
+                cursor_col++;
+                nano_wait(200000000);
+            }
+            if (joy1_y < 1000 && cursor_row > 0) {
+                cursor_row--;
+                nano_wait(200000000);
+            } else if (joy1_y > 3000 && cursor_row < 2) {
+                cursor_row++;
+                nano_wait(200000000);
+            }
+            // Check for selection (joystick centered)
+            if (joy1_x > 2000 && joy1_x < 2200 && joy1_y > 2000 && joy1_y < 2200) {
+                if (player_move(cursor_row, cursor_col)) {
+                    LCD_DrawGameState();
+                    if (check_win()) {
+                        // Display win message on LCD
+                        // Implement your win display function here
+                        break; // End the game
+                    } else if (check_draw()) {
+                        // Display draw message on LCD
+                        // Implement your draw display function here
+                        break; // End the game
+                    } else {
+                        switch_player();
+                    }
+                    nano_wait(500000000); // Wait before next move
+                }
+            }
+        } else {
+            // Player O uses joystick 2
+            // Similar handling for joystick 2
+            if (joy2_x < 1000 && cursor_col > 0) {
+                cursor_col--;
+                nano_wait(200000000);
+            } else if (joy2_x > 3000 && cursor_col < 2) {
+                cursor_col++;
+                nano_wait(200000000);
+            }
+            if (joy2_y < 1000 && cursor_row > 0) {
+                cursor_row--;
+                nano_wait(200000000);
+            } else if (joy2_y > 3000 && cursor_row < 2) {
+                cursor_row++;
+                nano_wait(200000000);
+            }
+            // Check for selection
+            if (joy2_x > 2000 && joy2_x < 2200 && joy2_y > 2000 && joy2_y < 2200) {
+                if (player_move(cursor_row, cursor_col)) {
+                    LCD_DrawGameState();
+                    if (check_win()) {
+                        // Display win message on LCD
+                        // Implement your win display function here
+                        break; // End the game
+                    } else if (check_draw()) {
+                        // Display draw message on LCD
+                        // Implement your draw display function here
+                        break; // End the game
+                    } else {
+                        switch_player();
+                    }
+                    nano_wait(500000000); // Wait before next move
+                }
+            }
         }
-#endif
 
-    init_tim7();
+        // Update cursor display
+        LCD_DrawCursor(cursor_row, cursor_col);
+    }
+}
 
-    // Demonstrate part 2
-//#define SHOW_KEY_EVENTS
-#ifdef SHOW_KEY_EVENTS
-    show_keys();
-#endif
+// Game logic functions
+void init_board(void) {
+    // Initialize the board to empty
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            board[i][j] = ' ';
+        }
+    }
+}
 
-    setup_adc();
-    init_tim2();
+int check_win(void) {
+    // Check rows, columns, and diagonals for a win
+    // ... (your existing logic)
+}
 
-    // Demonstrate part 3
-//#define SHOW_VOLTAGE
-#ifdef SHOW_VOLTAGE
-    for(;;) {
-        printfloat((2.95 * volume / 4096)/10000);
-    }
-#endif
-uint32_t uord1 = 2048;
-uint32_t lorr1 = 2048;
-uint32_t uord2 = 2048;
-uint32_t lorr2 = 2048;
-int ud1;
-int lr1;
-int ud2;
-int lr2;
-uint32_t uord1prev = 0;
-uint32_t lorr1prev = 0;
-uint32_t uord2prev = 0;
-#define UDLR
-#ifdef UDLR
-  //volume = 1.3;
-  //ADC1->CHSELR |= ADC_CHSELR_CHSEL1;
-  for(;;){
-    //ADC1->CR &= ~ADC_CR_ADDIS;
-    //ADC1->CR &= ~ADC_CR_ADSTART;
-    //ADC1->CR |= ADC_CR_ADSTART;
-    if (currentplayer == 'X'){
-      ADC1->CHSELR |= ADC_CHSELR_CHSEL1;
-      ADC1->CHSELR |= ADC_CHSELR_CHSEL2;
-      ADC1->CHSELR &= ~ADC_CHSELR_CHSEL3;
-      ADC1->CHSELR &= ~ADC_CHSELR_CHSEL6;
-    }
-    else{
-      ADC1->CHSELR &= ~ADC_CHSELR_CHSEL1;
-      ADC1->CHSELR &= ~ADC_CHSELR_CHSEL2;
-      ADC1->CHSELR |= ADC_CHSELR_CHSEL3;
-      ADC1->CHSELR |= ADC_CHSELR_CHSEL6;
-    }
-    nano_wait(100000000);
-    while ((ADC1->ISR & ADC_ISR_ADRDY) == 0); 
-    //ADC1->DR &= 0b0;
-    while (ADC1->DR == 0);
-    //uord1 = uord1prev;
-    uord1 = (ADC1->DR);
-    if (2.95*uord1/4096 >= 1.9){
-      print1("U");
-      ud1 = 0;
-      //volume = volume - 0;
-    }
-    else if (2.95*uord1/4096 <= 0.8){
-      print1("D");
-      ud1 = 2;
-    }
-    else{
-      print1("N");
-      ud1 = 1;
-    }
-    //uord1prev = uord1;
-    //uord1 = 0;
-    ADC1->CHSELR &= ~ADC_CHSELR_CHSEL1;
-    //ADC1->CR |= ADC_CR_ADDIS;
-    //ADC1->CR &= ~ADC_CR_ADSTART;
-    //ADC1->CR |= ADC_CR_ADSTART;
-    nano_wait(100000000);
-    //ADC1->CR &= ~ADC_CR_ADDIS;
-    while ((ADC1->ISR & ADC_ISR_ADRDY) == 0);
-    //ADC1->DR &= 0b0;
-    while (ADC1->DR == 0);
-    //lorr1 = lorr1prev;
-    lorr1 = (ADC1->DR);
-    if (2.95*lorr1/4096 >= 1.9){
-      print2("R");
-      lr1 = 2;
-      //volume = volume - 0;
-    }
-    else if (2.95*lorr1/4096 <= 0.8){
-      print2("L");
-      lr1 = 0;
-    }
-    else{
-      print2("N");
-      lr1 = 1;
-    }
-    //lorr1prev = lorr1;
-    //lorr1 = 0;
-    ADC1->CHSELR &= ~ADC_CHSELR_CHSEL2;
-    nano_wait(100000000);
-    //ADC1->CR &= ~ADC_CR_ADDIS;
-    while ((ADC1->ISR & ADC_ISR_ADRDY) == 0);
-    //ADC1->DR &= 0b0;
-    while (ADC1->DR == 0);
-    //lorr1 = lorr1prev;
-    uord2 = (ADC1->DR);
-    if (2.95*uord2/4096 >= 1.9){
-      print3("U");
-      ud2 = 0;
-      //volume = volume - 0;
-    }
-    else if (2.95*uord2/4096 <= 0.8){
-      print3("D");
-      ud2 = 2;
-    }
-    else{
-      print3("N");
-      ud2 = 1;
-    }
-    //lorr1prev = lorr1;
-    //lorr1 = 0;
-    ADC1->CHSELR &= ~ADC_CHSELR_CHSEL3;
-    nano_wait(100000000);
-    //ADC1->CR &= ~ADC_CR_ADDIS;
-    while ((ADC1->ISR & ADC_ISR_ADRDY) == 0);
-    //ADC1->DR &= 0b0;
-    while (ADC1->DR == 0);
-    //lorr1 = lorr1prev;
-    lorr2 = (ADC1->DR);
-    if (2.95*lorr2/4096 >= 1.9){
-      print4("R");
-      lr2 = 2;
-      //volume = volume - 0;
-    }
-    else if (2.95*lorr2/4096 <= 0.8){
-      print4("L");
-      lr2 = 0;
-    }
-    else{
-      print4("N");
-      lr2 = 1;
-    }
-    //lorr1prev = lorr1;
-    //lorr1 = 0;
-    
-    
-  }
-#endif
+int check_draw(void) {
+    // Check for a draw
+    // ... (your existing logic)
+}
 
-    init_wavetable();
-    setup_dac();
-    init_tim6();
-
-// #define ONE_TONE
-#ifdef ONE_TONE
-    for(;;) {
-        float f = getfloat();
-        set_freq(0,f);
+int player_move(int row, int column) {
+    if (board[row][column] == ' ') {
+        board[row][column] = currentplayer;
+        return 1; // Move successful
+    } else {
+        return 0; // Invalid move
     }
-#endif
+}
 
-    // demonstrate part 4
-// #define MIX_TONES
-#ifdef MIX_TONES
-    for(;;) {
-        char key = get_keypress();
-        if (key == 'A')
-            set_freq(0,getfloat());
-        if (key == 'B')
-            set_freq(1,getfloat());
-    }
-#endif
+void switch_player(void) {
+    currentplayer = (currentplayer == 'X') ? 'O' : 'X';
+}
 
-    // Have fun.
-    //dialer();
+// Hardware initialization functions
+void internal_clock(void) {
+    // Your existing clock initialization code
+    // ... (use your provided clock.c code)
+}
+
+void init_spi1(void) {
+    // Initialize SPI1 for TFT LCD
+    // Configure GPIOB pins for SPI1 and control signals
+    // Enable clocks, set pin modes, alternate functions, etc.
+    // ... (as detailed in your description)
+}
+
+void LCD_Init(void) {
+    // Initialize TFT LCD
+    // Reset sequence and initialization commands
+    // ... (as per your LCD controller's datasheet)
+}
+
+void setup_adc(void) {
+    // Initialize ADC to read joystick inputs
+    // Configure PA1, PA2, PA3, PA6 as analog inputs
+    // Enable ADC, set channels, etc.
+    // ... (adapt from your existing setup_adc function)
+}
+
+void nano_wait(unsigned int n) {
+    // Delay function
+    asm("        mov r0,%0\n"
+        "repeat: sub r0,#83\n"
+        "        bgt repeat\n" : : "r"(n) : "r0", "cc");
+}
+
+// LCD functions
+void LCD_SendCommand(uint8_t cmd) {
+    // Send command to LCD via SPI1
+    // ... (set DC low, CS low, send data, CS high)
+}
+
+void LCD_SendData(uint8_t data) {
+    // Send data to LCD via SPI1
+    // ... (set DC high, CS low, send data, CS high)
+}
+
+void LCD_DrawGameGrid(void) {
+    // Draw the tic-tac-toe grid on the LCD
+    // Use LCD drawing functions to draw lines
+    // ... (implement drawing code)
+}
+
+void LCD_DrawGameState(void) {
+    // Draw the current state of the game board
+    // Draw X or O in the appropriate cells
+    // ... (implement drawing code)
+}
+
+void LCD_DrawCursor(int row, int col) {
+    // Highlight the current cursor position
+    // ... (implement cursor drawing code)
+}
+
+// ADC functions
+uint16_t Read_ADC_Channel(uint32_t channel) {
+    ADC1->CHSELR = 0;
+    ADC1->CHSELR |= channel;
+    ADC1->CR |= ADC_CR_ADSTART;
+    while (!(ADC1->ISR & ADC_ISR_EOC));
+    return ADC1->DR;
+}
+
+void ReadJoysticks(int *joy1_x, int *joy1_y, int *joy2_x, int *joy2_y) {
+    *joy1_x = Read_ADC_Channel(ADC_CHSELR_CHSEL6); // PA6
+    *joy1_y = Read_ADC_Channel(ADC_CHSELR_CHSEL3); // PA3
+    *joy2_x = Read_ADC_Channel(ADC_CHSELR_CHSEL2); // PA2
+    *joy2_y = Read_ADC_Channel(ADC_CHSELR_CHSEL1); // PA1
 }
